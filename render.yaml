@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: pusher-p-inventory-manager
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_VERSION
+        value: 22
+      - key: SHOPIFY_API_VERSION
+        value: 2026-04
+      - key: SHOPIFY_STORE
+        sync: false
+      - key: SHOPIFY_CLIENT_ID
+        sync: false
+      - key: SHOPIFY_CLIENT_SECRET
+        sync: false
+      - key: IMPORTER_API_KEY
+        generateValue: true

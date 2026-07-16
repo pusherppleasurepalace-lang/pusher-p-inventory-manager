@@ -1,0 +1,21 @@
+UPLOAD TO GITHUB
+
+1. Open the pusher-p-inventory-manager repository.
+2. Click Add file.
+3. Click Upload files.
+4. Extract this ZIP first.
+5. Drag these files onto GitHub:
+   server.js
+   package.json
+   package-lock.json
+   render.yaml
+   .gitignore
+   .env.example
+   README.md
+6. Scroll down.
+7. Enter this commit message:
+   Add secure Shopify backend
+8. Click Commit changes.
+
+SECURITY:
+Never upload your real Shopify Client ID, Client Secret, access token, or .env file.
