@@ -8,7 +8,8 @@ const app = express();
 const PORT = Number(process.env.PORT || 10000);
 const API_VERSION = process.env.SHOPIFY_API_VERSION || "2026-04";
 const tokenCache = { value: null, expiresAt: 0 };
-const BACKEND_BUILD = "1.0.8";
+const taxonomyCategoryCache = new Map();
+const BACKEND_BUILD = "1.0.9";
 
 app.disable("x-powered-by");
 app.use(helmet({crossOriginResourcePolicy:{policy:"cross-origin"}}));
@@ -113,7 +114,53 @@ function metafields(p){
 function media(p){
   return p.images.map((url,i)=>({originalSource:url,mediaContentType:"IMAGE",alt:`${p.title}${i?` image ${i+1}`:""}`}));
 }
+function normalizedJewelryType(value){
+  const text=String(value||"").trim().toLowerCase();
+  if(/earring|hoop|stud|clip-on/.test(text)) return "Earrings";
+  if(/necklace|pendant|choker/.test(text)) return "Necklaces";
+  if(/bracelet|bangle|cuff/.test(text)) return "Bracelets";
+  if(/anklet/.test(text)) return "Anklets";
+  if(/ring/.test(text)) return "Rings";
+  if(/brooch|pin/.test(text)) return "Brooches & Lapel Pins";
+  if(/jewelry|jewellery/.test(text)) return "Jewelry";
+  return "Jewelry";
+}
+async function resolveTaxonomyCategory(productType){
+  const wanted=normalizedJewelryType(productType);
+  if(taxonomyCategoryCache.has(wanted)) return taxonomyCategoryCache.get(wanted);
+
+  const query=`query($search:String!){
+    taxonomy{
+      categories(first:50,search:$search){
+        nodes{id name fullName isArchived isLeaf}
+      }
+    }
+  }`;
+
+  async function search(term){
+    const d=await gql(query,{search:term});
+    return (d.taxonomy?.categories?.nodes||[]).filter(x=>x?.id&&!x.isArchived);
+  }
+
+  let nodes=await search(wanted);
+  if(!nodes.length&&wanted!=="Jewelry") nodes=await search("Jewelry");
+
+  const jewelryNodes=nodes.filter(x=>/apparel\s*&\s*accessories.*jewelry/i.test(x.fullName||""));
+  const pool=jewelryNodes.length?jewelryNodes:nodes;
+  const wantedLower=wanted.toLowerCase();
+
+  let match=pool.find(x=>String(x.name||"").toLowerCase()===wantedLower);
+  if(!match) match=pool.find(x=>String(x.fullName||"").toLowerCase().endsWith(`> ${wantedLower}`));
+  if(!match&&wanted==="Jewelry") match=pool.find(x=>String(x.name||"").toLowerCase()==="jewelry");
+  if(!match) match=pool.find(x=>x.isLeaf);
+  if(!match) match=pool[0]||null;
+
+  const result=match?{id:match.id,name:match.name,fullName:match.fullName}:null;
+  taxonomyCategoryCache.set(wanted,result);
+  return result;
+}
 async function createProduct(p){
+  const taxonomyCategory=await resolveTaxonomyCategory(p.productType);
   const mutation=`mutation($product:ProductCreateInput!,$media:[CreateMediaInput!]){
     productCreate(product:$product,media:$media){
       product{id title handle variants(first:1){nodes{id inventoryItem{id tracked}}}}
@@ -122,7 +169,8 @@ async function createProduct(p){
   }`;
   const d=await gql(mutation,{product:{
     title:p.title,descriptionHtml:p.descriptionHtml,vendor:p.vendor,
-    productType:p.productType,status:"ACTIVE",metafields:metafields(p)
+    productType:p.productType,status:"ACTIVE",metafields:metafields(p),
+    ...(taxonomyCategory?.id?{category:taxonomyCategory.id}:{})
   },media:media(p)});
   const r=d.productCreate;
   if(r.userErrors?.length) throw new Error(`Product creation failed: ${JSON.stringify(r.userErrors)}`);
@@ -145,6 +193,7 @@ async function updateVariant(productId,variantId,p){
   return r.productVariants?.[0]?.inventoryItem?.id;
 }
 async function updateExisting(existing,p){
+  const taxonomyCategory=await resolveTaxonomyCategory(p.productType);
   // Update product fields without re-adding media. This prevents duplicate images
   // when the same SKU is retried after a later inventory step fails.
   const mutation=`mutation($product:ProductUpdateInput!){
@@ -155,7 +204,8 @@ async function updateExisting(existing,p){
   }`;
   const d=await gql(mutation,{product:{
     id:existing.product.id,title:p.title,descriptionHtml:p.descriptionHtml,vendor:p.vendor,
-    productType:p.productType,status:"ACTIVE",metafields:metafields(p)
+    productType:p.productType,status:"ACTIVE",metafields:metafields(p),
+    ...(taxonomyCategory?.id?{category:taxonomyCategory.id}:{})
   }});
   const r=d.productUpdate;
   if(r.userErrors?.length) throw new Error(`Product update failed: ${JSON.stringify(r.userErrors)}`);
@@ -270,12 +320,14 @@ app.post("/api/products/import",verifyKey,async(req,res)=>{
     await activateInventory(result.inventoryItemId,location.id);
     await setInventory(result.inventoryItemId,location.id,p.quantity);
     const publishing=await publishToAllChannels(result.productId);
+    const taxonomyCategory=await resolveTaxonomyCategory(p.productType);
     const shop=normalizeShop(requiredEnv("SHOPIFY_STORE"));
     const numericId=String(result.productId).split("/").pop();
     res.json({ok:true,build:BACKEND_BUILD,action,sku:p.sku,quantity:p.quantity,location:location.name,
       product:{id:result.productId,title:result.title,handle:result.handle,adminUrl:`https://${shop}/admin/products/${numericId}`},
       publishing,
-      note:publishing.warning||`Product is active and published to ${publishing.publishedCount} of ${publishing.totalCount} available channels.`
+      category:taxonomyCategory||null,
+      note:publishing.warning||`Product is active, categorized as ${taxonomyCategory?.name||p.productType}, and published to ${publishing.publishedCount} of ${publishing.totalCount} available channels.`
     });
   }catch(e){console.error(e);res.status(500).json({ok:false,error:e.message});}
 });
