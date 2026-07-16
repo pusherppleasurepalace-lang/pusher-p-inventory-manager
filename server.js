@@ -8,7 +8,7 @@ const app = express();
 const PORT = Number(process.env.PORT || 10000);
 const API_VERSION = process.env.SHOPIFY_API_VERSION || "2026-04";
 const tokenCache = { value: null, expiresAt: 0 };
-const BACKEND_BUILD = "1.0.6";
+const BACKEND_BUILD = "1.0.7";
 
 app.disable("x-powered-by");
 app.use(helmet({crossOriginResourcePolicy:{policy:"cross-origin"}}));
@@ -186,22 +186,22 @@ async function activateInventory(inventoryItemId,locationId){
   }
 }
 async function getAllPublications(){
-  const d=await gql(`query{publications(first:100){nodes{id}}}`);
-  return (d.publications?.nodes||[]).map(x=>x.id).filter(Boolean);
+  const d=await gql(`query{publications(first:100){nodes{id name catalog{title}}}}`);
+  return (d.publications?.nodes||[]).filter(x=>x?.id);
 }
 async function publishToAllChannels(productId){
-  let publicationIds;
+  let publications;
   try{
-    publicationIds=await getAllPublications();
+    publications=await getAllPublications();
   }catch(e){
     const message=String(e?.message||e);
     if(/access scope|read_publications|write_publications|forbidden|unauthorized/i.test(message)){
-      return {publishedCount:0,totalCount:0,warning:"Add read_publications and write_publications to the Shopify app, then redeploy."};
+      return {publishedCount:0,totalCount:0,warning:"Shopify app permission required: add read_publications and write_publications, reinstall/update the app, then redeploy."};
     }
     throw e;
   }
-  if(!publicationIds.length){
-    return {publishedCount:0,totalCount:0,warning:"Shopify returned no available sales-channel publications."};
+  if(!publications.length){
+    return {publishedCount:0,totalCount:0,warning:"Shopify returned no sales-channel publications available to this app."};
   }
   const mutation=`mutation($id:ID!,$input:[PublicationInput!]!){
     publishablePublish(id:$id,input:$input){
@@ -209,28 +209,23 @@ async function publishToAllChannels(productId){
       userErrors{field message}
     }
   }`;
-  let publishedCount=0;
-  const errors=[];
-  for(const publicationId of publicationIds){
-    try{
-      const d=await gql(mutation,{id:productId,input:[{publicationId}]});
-      const userErrors=d.publishablePublish?.userErrors||[];
-      if(userErrors.length){
-        const meaningful=userErrors.filter(e=>!/already published/i.test(e.message||""));
-        if(meaningful.length) errors.push(...meaningful.map(e=>e.message||"Publication failed"));
-        else publishedCount++;
-      }else{
-        publishedCount++;
-      }
-    }catch(e){
-      errors.push(String(e?.message||e));
+  const input=publications.map(x=>({publicationId:x.id}));
+  try{
+    const d=await gql(mutation,{id:productId,input});
+    const userErrors=d.publishablePublish?.userErrors||[];
+    const meaningful=userErrors.filter(e=>!/already published/i.test(e.message||""));
+    const names=publications.map(x=>x.name||x.catalog?.title).filter(Boolean);
+    if(meaningful.length){
+      return {publishedCount:Math.max(0,publications.length-meaningful.length),totalCount:publications.length,channels:names,warning:meaningful.map(e=>e.message).join(" | ")};
     }
+    return {publishedCount:publications.length,totalCount:publications.length,channels:names,warning:""};
+  }catch(e){
+    const message=String(e?.message||e);
+    if(/access scope|write_publications|forbidden|unauthorized/i.test(message)){
+      return {publishedCount:0,totalCount:publications.length,channels:publications.map(x=>x.name||x.catalog?.title).filter(Boolean),warning:"Shopify app permission required: add write_publications and reinstall/update the app."};
+    }
+    throw e;
   }
-  return {
-    publishedCount,
-    totalCount:publicationIds.length,
-    warning:errors.length?`Published to ${publishedCount} of ${publicationIds.length} channels. ${errors[0]}`:""
-  };
 }
 async function setInventory(inventoryItemId,locationId,quantity){
   const mutation=`mutation($input:InventorySetQuantitiesInput!,$idempotencyKey:String!){
