@@ -24,3 +24,10 @@ Enter these only in Render under **Environment**:
 - Updates the existing product if the SKU already exists.
 - Adds up to 10 images.
 - Sets title, description, vendor, type, price, SKU, inventory, and bin location.
+
+
+## Version 1.0.2
+
+- Adds Shopify 2026-04 `@idempotent` directives to `inventoryActivate` and `inventorySetQuantities`.
+- Generates UUID idempotency keys for inventory operations.
+- Updates absolute inventory setting to use `ignoreCompareQuantity` with the current input format.

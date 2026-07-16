@@ -1,6 +1,6 @@
 {
   "name": "pusher-p-inventory-manager-backend",
-  "version": "1.0.0",
+  "version": "1.0.2",
   "private": true,
   "description": "Secure Shopify backend for Pusher P Inventory Manager",
   "main": "server.js",

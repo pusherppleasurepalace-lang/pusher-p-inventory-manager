@@ -167,29 +167,38 @@ async function ensureTracked(inventoryItemId,sku){
   if(d.inventoryItemUpdate.userErrors?.length) throw new Error(`Inventory item update failed: ${JSON.stringify(d.inventoryItemUpdate.userErrors)}`);
 }
 async function activateInventory(inventoryItemId,locationId){
-  const mutation=`mutation($inventoryItemId:ID!,$locationId:ID!){
-    inventoryActivate(inventoryItemId:$inventoryItemId,locationId:$locationId){
+  const mutation=`mutation($inventoryItemId:ID!,$locationId:ID!,$idempotencyKey:String!){
+    inventoryActivate(inventoryItemId:$inventoryItemId,locationId:$locationId) @idempotent(key:$idempotencyKey){
       inventoryLevel{id} userErrors{field message}
     }
   }`;
-  const d=await gql(mutation,{inventoryItemId,locationId});
+  const d=await gql(mutation,{
+    inventoryItemId,
+    locationId,
+    idempotencyKey:crypto.randomUUID()
+  });
   const errors=d.inventoryActivate.userErrors||[];
   if(errors.length&&!errors.every(e=>/already active|already stocked|already connected/i.test(e.message||""))){
     throw new Error(`Inventory activation failed: ${JSON.stringify(errors)}`);
   }
 }
 async function setInventory(inventoryItemId,locationId,quantity){
-  const mutation=`mutation($input:InventorySetQuantitiesInput!){
-    inventorySetQuantities(input:$input){
+  const mutation=`mutation($input:InventorySetQuantitiesInput!,$idempotencyKey:String!){
+    inventorySetQuantities(input:$input) @idempotent(key:$idempotencyKey){
       inventoryAdjustmentGroup{createdAt reason changes{name delta}}
       userErrors{field message}
     }
   }`;
-  const d=await gql(mutation,{input:{
-    name:"available",reason:"correction",
-    referenceDocumentUri:`gid://pusher-p-inventory/import/${Date.now()}`,
-    quantities:[{inventoryItemId,locationId,quantity,changeFromQuantity:null}]
-  }});
+  const d=await gql(mutation,{
+    idempotencyKey:crypto.randomUUID(),
+    input:{
+      name:"available",
+      reason:"correction",
+      referenceDocumentUri:`gid://pusher-p-inventory/import/${Date.now()}-${crypto.randomUUID()}`,
+      ignoreCompareQuantity:true,
+      quantities:[{inventoryItemId,locationId,quantity}]
+    }
+  });
   if(d.inventorySetQuantities.userErrors?.length) throw new Error(`Inventory update failed: ${JSON.stringify(d.inventorySetQuantities.userErrors)}`);
 }
 
