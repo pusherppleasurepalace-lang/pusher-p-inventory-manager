@@ -8,7 +8,7 @@ const app = express();
 const PORT = Number(process.env.PORT || 10000);
 const API_VERSION = process.env.SHOPIFY_API_VERSION || "2026-04";
 const tokenCache = { value: null, expiresAt: 0 };
-const BACKEND_BUILD = "1.0.7";
+const BACKEND_BUILD = "1.0.8";
 
 app.disable("x-powered-by");
 app.use(helmet({crossOriginResourcePolicy:{policy:"cross-origin"}}));
@@ -205,7 +205,6 @@ async function publishToAllChannels(productId){
   }
   const mutation=`mutation($id:ID!,$input:[PublicationInput!]!){
     publishablePublish(id:$id,input:$input){
-      publishable{id}
       userErrors{field message}
     }
   }`;
