@@ -1,6 +1,20 @@
-# Pusher P Inventory Manager Backend
+# Pusher P Inventory Manager Backend v1.0.6
 
 Secure Shopify backend for the Pusher P Inventory Manager Chrome extension.
+
+## Required Shopify app scopes
+
+The app must have these Admin API scopes:
+
+- `read_products`
+- `write_products`
+- `read_inventory`
+- `write_inventory`
+- `read_locations`
+- `read_publications`
+- `write_publications`
+
+After adding publication scopes in the Shopify app configuration, release/update the app version so newly issued client-credentials tokens include them.
 
 ## Never upload secrets to GitHub
 
@@ -22,12 +36,6 @@ Enter these only in Render under **Environment**:
 
 - Creates a product if the SKU is new.
 - Updates the existing product if the SKU already exists.
-- Adds up to 10 images.
+- Adds up to 10 images on new products.
 - Sets title, description, vendor, type, price, SKU, inventory, and bin location.
-
-
-## Version 1.0.2
-
-- Adds Shopify 2026-04 `@idempotent` directives to `inventoryActivate` and `inventorySetQuantities`.
-- Generates UUID idempotency keys for inventory operations.
-- Updates absolute inventory setting to use `ignoreCompareQuantity` with the current input format.
+- Publishes the product to every publication/channel available to the app.

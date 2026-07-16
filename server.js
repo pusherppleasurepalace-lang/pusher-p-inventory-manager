@@ -8,7 +8,7 @@ const app = express();
 const PORT = Number(process.env.PORT || 10000);
 const API_VERSION = process.env.SHOPIFY_API_VERSION || "2026-04";
 const tokenCache = { value: null, expiresAt: 0 };
-const BACKEND_BUILD = "1.0.4";
+const BACKEND_BUILD = "1.0.6";
 
 app.disable("x-powered-by");
 app.use(helmet({crossOriginResourcePolicy:{policy:"cross-origin"}}));
@@ -145,8 +145,10 @@ async function updateVariant(productId,variantId,p){
   return r.productVariants?.[0]?.inventoryItem?.id;
 }
 async function updateExisting(existing,p){
-  const mutation=`mutation($product:ProductUpdateInput!,$media:[CreateMediaInput!]){
-    productUpdate(product:$product,media:$media){
+  // Update product fields without re-adding media. This prevents duplicate images
+  // when the same SKU is retried after a later inventory step fails.
+  const mutation=`mutation($product:ProductUpdateInput!){
+    productUpdate(product:$product){
       product{id title handle}
       userErrors{field message}
     }
@@ -154,7 +156,7 @@ async function updateExisting(existing,p){
   const d=await gql(mutation,{product:{
     id:existing.product.id,title:p.title,descriptionHtml:p.descriptionHtml,vendor:p.vendor,
     productType:p.productType,status:"ACTIVE",metafields:metafields(p)
-  },media:media(p)});
+  }});
   const r=d.productUpdate;
   if(r.userErrors?.length) throw new Error(`Product update failed: ${JSON.stringify(r.userErrors)}`);
   await updateVariant(existing.product.id,existing.id,p);
@@ -182,6 +184,53 @@ async function activateInventory(inventoryItemId,locationId){
   if(errors.length&&!errors.every(e=>/already active|already stocked|already connected/i.test(e.message||""))){
     throw new Error(`Inventory activation failed: ${JSON.stringify(errors)}`);
   }
+}
+async function getAllPublications(){
+  const d=await gql(`query{publications(first:100){nodes{id}}}`);
+  return (d.publications?.nodes||[]).map(x=>x.id).filter(Boolean);
+}
+async function publishToAllChannels(productId){
+  let publicationIds;
+  try{
+    publicationIds=await getAllPublications();
+  }catch(e){
+    const message=String(e?.message||e);
+    if(/access scope|read_publications|write_publications|forbidden|unauthorized/i.test(message)){
+      return {publishedCount:0,totalCount:0,warning:"Add read_publications and write_publications to the Shopify app, then redeploy."};
+    }
+    throw e;
+  }
+  if(!publicationIds.length){
+    return {publishedCount:0,totalCount:0,warning:"Shopify returned no available sales-channel publications."};
+  }
+  const mutation=`mutation($id:ID!,$input:[PublicationInput!]!){
+    publishablePublish(id:$id,input:$input){
+      publishable{id}
+      userErrors{field message}
+    }
+  }`;
+  let publishedCount=0;
+  const errors=[];
+  for(const publicationId of publicationIds){
+    try{
+      const d=await gql(mutation,{id:productId,input:[{publicationId}]});
+      const userErrors=d.publishablePublish?.userErrors||[];
+      if(userErrors.length){
+        const meaningful=userErrors.filter(e=>!/already published/i.test(e.message||""));
+        if(meaningful.length) errors.push(...meaningful.map(e=>e.message||"Publication failed"));
+        else publishedCount++;
+      }else{
+        publishedCount++;
+      }
+    }catch(e){
+      errors.push(String(e?.message||e));
+    }
+  }
+  return {
+    publishedCount,
+    totalCount:publicationIds.length,
+    warning:errors.length?`Published to ${publishedCount} of ${publicationIds.length} channels. ${errors[0]}`:""
+  };
 }
 async function setInventory(inventoryItemId,locationId,quantity){
   const mutation=`mutation($input:InventorySetQuantitiesInput!,$idempotencyKey:String!){
@@ -226,11 +275,13 @@ app.post("/api/products/import",verifyKey,async(req,res)=>{
     await ensureTracked(result.inventoryItemId,p.sku);
     await activateInventory(result.inventoryItemId,location.id);
     await setInventory(result.inventoryItemId,location.id,p.quantity);
+    const publishing=await publishToAllChannels(result.productId);
     const shop=normalizeShop(requiredEnv("SHOPIFY_STORE"));
     const numericId=String(result.productId).split("/").pop();
     res.json({ok:true,build:BACKEND_BUILD,action,sku:p.sku,quantity:p.quantity,location:location.name,
       product:{id:result.productId,title:result.title,handle:result.handle,adminUrl:`https://${shop}/admin/products/${numericId}`},
-      note:"Product is active in Shopify Admin. Publishing to sales channels will be added after write_publications scope is enabled."
+      publishing,
+      note:publishing.warning||`Product is active and published to ${publishing.publishedCount} of ${publishing.totalCount} available channels.`
     });
   }catch(e){console.error(e);res.status(500).json({ok:false,error:e.message});}
 });
